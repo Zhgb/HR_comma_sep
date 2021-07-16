@@ -1,0 +1,176 @@
+---
+title: "Why emoployee turnover"
+author: "Zhong guangbin"
+date: "2021/7/13"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE,warning=FALSE}
+knitr::opts_chunk$set(warning = F,message = F)
+```
+
+## 1 Load package
+```{r,warning=FALSE}
+library(tidyverse)
+library(VIM)
+library(randomForest)
+library(GGally)
+library(glmnet)
+```
+
+## 2 explore data
+#### 2.1 Load data
+```{r}
+d <- read.csv("HR_comma_sep.csv")
+```
+
+### 2.2 view data
+####   2.2.1 What's the turnover rate in this company
+```{r}
+head(d)
+str(d)
+```
+```{r}
+summary(d)
+  d %>%
+   group_by(factor(left)) %>%
+   summarise(counts = n()) %>%
+   mutate(ratio = counts/sum(counts))
+```
+   The turnover rate was as high as 23.8%
+   
+####   2.2.2 Check for missing values
+```{r}
+aggr(d,prop = F, number = T)
+```
+No missing data
+
+#### 2.2.3 Distribution of characteristics of departing employees and existing employees
+```{r}
+d %>%
+   pivot_longer(c(1:6,8),names_to = "type",values_to = "value") %>%
+   ggplot(aes(value)) +
+   theme_bw() +
+   geom_histogram(aes(fill = factor(left)),color = "black") +
+   facet_wrap(~type,ncol = 2,scales = "free") 
+```
+
+   The employees who left were involved in more projects, and all of the employees who left were promoted within five years
+
+
+```{r}
+d$salary <- factor(d$salary,
+                   levels = c("low","medium","high"))
+
+d %>%
+   pivot_longer(c(1:6,8),names_to = "type",values_to = "value") %>%
+   ggplot(aes(salary,value)) +
+   theme_bw() +
+   geom_boxplot(aes(fill = factor(left)),position = "dodge") +
+   facet_wrap(~type,ncol = 2,scales = "free") 
+
+```
+   Among the departed employees, those with low and medium salaries devote more time and projects, and their satisfaction has decreased significantly compared with last time.                                                                     This may be one of the reasons for the resignation of the employees (the salary is not fully paid).                                                          While the time spent on a high salary didn't differ much, the number of projects they participated in declined (marginalization), notice that the high salary group also reported low levels of satisfaction last month, and this may have been the case for a long time.
+
+#### 2.2.4 Which department has the higher turnover rate
+```{r}
+d1 <- d %>%
+   group_by(sales,left) %>%
+   mutate(n = n()) %>%
+   group_by(sales) %>%
+   mutate(total_n = n(),n_ratio = n/total_n) %>%
+   distinct(n_ratio,.keep_all = T) %>%
+   filter(left == 1) %>%
+   arrange(desc(n_ratio))
+   head(d1[,c(9,13)])
+```
+
+   The top three parts of the turnover rate are HR, Accounting and Technical in turn,respectively, at 29.1%, 26.6% and 25.6%
+
+```{r}
+   ggplot(d1, aes(sales,n_ratio)) +
+   theme_bw() +
+   geom_col(color = "black",fill = "lightblue") +
+   geom_hline(yintercept = 0.25,linetype = "dashed")
+```
+    The turnover rate of managment department and RandD department is significantly lower than that of other departments
+   
+
+```{r}
+ggplot(data = d,aes(last_evaluation,satisfaction_level)) +
+   theme_bw() +
+   geom_point(aes(color = factor(left))) +
+   facet_wrap(~factor(left))
+```
+
+   Judging from the two ratings, there are three main types of employees who leave the company:
+    The first, whose scores dropped significantly (bottom right), may have been unhappy at work during that time;
+    The second, rated highly both times (top right), may have been lured away by competing jobs;
+    The third kind, two grades are not high, may be long-term work is not happy
+
+
+## 3 Data analysis
+###  3.1 which cause left
+#### 3.1.1 Pre-predictive processing
+```{r}
+str(d)
+cor(d[,-c(9,10)])
+factor_vars <- c("Work_accident","left","promotion_last_5years")
+d[factor_vars] <- lapply(d[factor_vars], function(x) as.factor(x))
+
+```
+#### 3.1.2 Prediction and Plot
+```{r}
+set.seed(2021)
+left_model <- randomForest(left~.,data = d)
+print(left_model)
+plot(left_model)
+```
+
+   Importance rank
+```{r}
+left_important <- importance(left_model)
+varimportant <- data.frame(varialbes = row.names(left_important),
+                           Importance = round(left_important[,'MeanDecreaseGini'],2))
+```
+
+
+```{r}
+varimportant %>%
+   mutate(Rank = paste0("#",dense_rank(desc(left_important)))) %>%
+   ggplot(aes(x = reorder(varialbes,Importance), y = Importance)) +
+   theme_bw() +
+   geom_col(color = "#000000",fill = "lightblue") +
+     geom_text(aes(x = varialbes, y = 3, label = Rank),
+    hjust=0, vjust=0.55, size = 4, colour = 'black') +
+   coord_flip() 
+ 
+```
+
+
+```{r}
+ind <- sample(2,nrow(d),replace = T,prob = c(0.7,0.3))
+train <- d[ind == 1,]
+test <- d[ind == 2,]
+randomForest_model <- randomForest(left~.,data = train)
+predicted_train <- predict(randomForest_model,newdata = train,type = "response")
+Metrics::ce(train$left,predicted_train)
+predicted_test <- predict(randomForest_model,newdata = test,type = "response")
+Metrics::ce(test$left,predicted_test)
+```
+
+
+### 3.2 Which employees are potential quitters
+```{r}
+d %>%
+   mutate(predict_left = predict(randomForest_model,newdata = d,type = "response")) %>%
+   filter(left == "0" & predict_left == "1") %>%
+   ggplot(aes(sales)) +
+   theme_bw() +
+   geom_bar(fill = "lightblue", color = "black")
+```
+
+
+
